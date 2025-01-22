@@ -1,0 +1,69 @@
+# Playbook for provisioning users and services on all hosts
+# Requires elevated privileges and uses variables from main.yml
+- name: Provision Users and Services
+  hosts: all
+  become: true
+  vars_files:
+    - variables/main.yml
+  tasks:
+    # Configure system limits for root user to handle high concurrent connections
+    - name: Set open file limit for root user
+      lineinfile:
+        path: /etc/security/limits.conf
+        line: "root soft nofile {{ open_file_limit }}\nroot hard nofile {{ open_file_limit }}"
+        state: present
+
+    # Import external task file containing user creation logic
+    - name: Create user accounts
+      include_tasks: tasks/create_users.yml
+
+    # Install Docker package using the system package manager
+    - name: Install Docker
+      ansible.builtin.package:
+        name: docker.io
+        state: present
+
+    # Deploy Docker container with port forwarding from 55000 to container port 80
+    - name: Run Docker container
+      community.docker.docker_container:
+        name: "{{ docker_container_name }}"
+        image: "{{ docker_image }}"
+        published_ports:
+          - "55000:80"
+        state: started
+
+    # Include NGINX role for web server setup and configuration
+    - name: Install NGINX using a role
+      ansible.builtin.include_role:
+        name: nginx
+
+    # Download external file without certificate validation
+    # Note: Consider enabling certificate validation in production
+    - name: Download and distribute prrtprrt.txt
+      get_url:
+        url: "https://gist.githubusercontent.com/slgevens/aa9a2fc52cb5fef8b41c1b11a8b7d3e3/raw/dc1e3e288967bd4818277e4688d1daf615225337/prrtprrt.txt"
+        dest: "/home/ubuntu/prrtprrt.txt"
+        validate_certs: no
+      register: prrt_file
+
+    # Create home directories for all users defined in user_accounts
+    - name: Ensure user home directories exist
+      file:
+        path: "/home/{{ item }}"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: 0755
+      loop: "{{ user_accounts.keys() }}"
+
+    # Distribute downloaded file to each user's home directory
+    # Uses remote_src as file is already on the remote system
+    - name: Copy file to users' home directories
+      copy:
+        src: "/tmp/prrtprrt.txt"
+        dest: "/home/{{ item }}/prrtprrt.txt"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: 0644
+        remote_src: yes
+      loop: "{{ user_accounts.keys() }}"

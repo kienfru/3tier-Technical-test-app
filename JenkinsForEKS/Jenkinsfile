@@ -1,0 +1,54 @@
+pipeline {
+    agent any
+    environment {
+        EKS_CLUSTER = 'your-eks-cluster-name'
+        AWS_REGION = 'your-aws-region'
+        DOCKER_REGISTRY = 'your-ecr-repository-url'
+    }
+    stages {
+        stage('Clone Repositories') {
+            steps {
+                sh 'git clone https://github.com/slgevens/example-ariane.git ariane'
+                sh 'git clone https://github.com/slgevens/example-falcon.git falcon'
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    sh 'docker build -t $DOCKER_REGISTRY/frontend:latest -f dockerfiles/frontend/Dockerfile .'
+                    sh 'docker build -t $DOCKER_REGISTRY/backend:latest -f dockerfiles/backend/DockerFile .'
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                script {
+                    sh 'cd ariane && npm test'
+                    sh 'cd falcon && pytest'
+                }
+            }
+        }
+        stage('Push to ECR') {
+            steps {
+                withAWS(region: "$AWS_REGION", credentials: 'aws-credentials-id') {
+                    script {
+                        sh 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $DOCKER_REGISTRY'
+                        sh 'docker push $DOCKER_REGISTRY/frontend:latest'
+                        sh 'docker push $DOCKER_REGISTRY/backend:latest'
+                    }
+                }
+            }
+        }
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    // Apply Kubernetes deployment YAML to EKS
+                    sh 'aws eks --region $AWS_REGION update-kubeconfig --name $EKS_CLUSTER'
+                    sh 'kubectl apply -f manifests/backend.yaml'
+                    sh 'kubectl apply -f manifests/frontend.yaml'
+                    sh 'kubectl apply -f prometheus.yaml'
+                }
+            }
+        }
+    }
+}
